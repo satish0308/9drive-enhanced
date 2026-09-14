@@ -3,16 +3,14 @@ dist/
 *.log
 .DS_Store
 
-# Secrets
+# Secrets & Environment
 .env
+*.env
 backend/.env
-backend/.env.local
-backend/.env.*.local
+backend/.env.*
+frontend/.env
+frontend/.env.*
 
 # Databases
 *.db
 *.db-journal
-
-# Local env is non-secret by default, keep example in repo instead.
-frontend/.env.local
-frontend/.env.*.local
