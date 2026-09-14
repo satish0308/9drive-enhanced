@@ -892,11 +892,52 @@ export function GooglePhotosPage() {
           <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
             <Button
               size="sm"
-              onClick={() => handleOpenGooglePhotosPicker(accountsWithPhotosAccess[0].id)}
-              className="h-8 gap-1.5 rounded-xl bg-gradient-to-r from-indigo-600 via-rose-500 to-amber-500 px-3 text-xs font-bold text-white shadow hover:opacity-90"
+              onClick={async () => {
+                if (!window.confirm('Delete the selected photos from Google Photos? This cannot be undone.')) return;
+                try {
+                  await apiFetch('/photos', {
+                    method: 'DELETE',
+                    body: JSON.stringify({
+                      accountId: selectedAccountId,
+                      mediaItemIds: Array.from(selectedIds),
+                    }),
+                  });
+                  // Refresh UI after deletion
+                  setSelectedIds(new Set());
+                  fetchPhotos();
+                } catch (err) {
+                  console.error('Failed to delete photos:', err);
+                  alert('Could not delete photos. See console for details.');
+                }
+              }}
+              disabled={selectedIds.size === 0}
+              className="h-8 gap-1.5 rounded-xl bg-gray-600 px-3 text-xs font-bold text-white hover:bg-gray-700"
             >
-              <Cloud className="h-3.5 w-3.5" />
-              Import Photos to Drive
+              Delete Selected
+            </Button>
+            <Button
+              size="sm"
+              onClick={async () => {
+                try {
+                  await apiFetch('/photos', {
+                    method: 'DELETE',
+                    body: JSON.stringify({
+                      accountId: pickerTargetAccountId,
+                      mediaItemIds: pickedItems.map((i) => i.id),
+                    }),
+                  });
+                  // Refresh UI after deletion
+                  setPickedItems([]);
+                  setPickerStep('opening');
+                } catch (err) {
+                  console.error('Failed to delete photos:', err);
+                  alert('Could not delete photos. See console for details.');
+                }
+              }}
+              disabled={pickedItems.length === 0}
+              className="h-8 gap-1.5 rounded-xl bg-gray-600 px-3 text-xs font-bold text-white hover:bg-gray-700"
+            >
+              Delete from Google Photos
             </Button>
             <button
               onClick={() => setDismissCloudBanner(true)}

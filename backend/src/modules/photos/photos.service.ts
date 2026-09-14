@@ -927,3 +927,40 @@ export async function importPickerItems(params: {
     results,
   }
 }
+
+// Bulk delete media items from Google Photos library
+export async function deleteGooglePhotos(params: { accountId: string; userId: string; mediaItemIds: string[] }) {
+  const { accountId, userId, mediaItemIds } = params;
+  if (!mediaItemIds || mediaItemIds.length === 0) {
+    throw new Error('No media items to delete.');
+  }
+
+  const account = await prisma.connectedAccount.findFirstOrThrow({
+    where: { id: accountId, userId, status: 'connected', provider: 'google_drive' },
+  });
+
+  const auth = await getAuthedGoogleClient(account);
+  // Verify required scope for full Photos library access
+  const scopes = (account.scopes as string[]) || [];
+  if (!scopes.some((s) => s.includes('photoslibrary'))) {
+    throw new Error('GOOGLE_PHOTOS_LIBRARY_API_SCOPE_MISSING');
+  }
+
+  const photos = (google as any).photoslibrary({ version: 'v1', auth });
+  const chunkSize = 50; // Google API limit per batchDelete call
+  const deleted: string[] = [];
+  const failed: string[] = [];
+
+  for (let i = 0; i < mediaItemIds.length; i += chunkSize) {
+    const chunk = mediaItemIds.slice(i, i + chunkSize);
+    try {
+      await photos.mediaItems.batchDelete({ requestBody: { mediaItemIds: chunk } });
+      deleted.push(...chunk);
+    } catch (err) {
+      console.warn('Failed to delete Google Photos items:', err);
+      failed.push(...chunk);
+    }
+  }
+
+  return { deleted, failed };
+}

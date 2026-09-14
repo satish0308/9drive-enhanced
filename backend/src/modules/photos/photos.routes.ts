@@ -15,6 +15,7 @@ import {
   createGooglePickerSession,
   pollGooglePickerSession,
   importPickerItems,
+  deleteGooglePhotos,
 } from './photos.service.js'
 
 export const photosRouter = Router()
@@ -166,7 +167,27 @@ photosRouter.post('/picker/import', async (req: AuthRequest, res, next) => {
   }
 })
 
-// 8. Account Google Photos status (checks if Google Photos permissions are granted)
+  // 8. Bulk delete Google Photos media items
+  const deleteSchema = z.object({
+    accountId: z.string().min(1),
+    mediaItemIds: z.array(z.string().min(1)).min(1),
+  })
+
+  photosRouter.delete('/', async (req: AuthRequest, res, next) => {
+    try {
+      const body = deleteSchema.parse(req.body)
+      const result = await deleteGooglePhotos({
+        accountId: body.accountId,
+        userId: req.user!.id,
+        mediaItemIds: body.mediaItemIds,
+      })
+      return res.json(result)
+    } catch (error) {
+      return next(error)
+    }
+  })
+
+  // 9. Account Google Photos status (checks if Google Photos permissions are granted)
 photosRouter.get('/accounts-status', async (req: AuthRequest, res, next) => {
   try {
     const accounts = await prisma.connectedAccount.findMany({
