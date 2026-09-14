@@ -6,6 +6,9 @@ export type FolderItem = {
   iconUrl?: string | null
   parentId?: string | null
   providerFolderId?: string | null
+  connectedAccountId?: string | null
+  accountEmail?: string
+  accountColor?: string
 }
 
 export type FileItem = {
@@ -18,8 +21,10 @@ export type FileItem = {
   access: string
   accountEmail?: string
   accountProvider?: string
+  accountColor?: string
+  connectedAccountId?: string
   createdAt?: string
-  kind: 'doc' | 'image' | 'video' | 'pdf'
+  kind: 'doc' | 'image' | 'video' | 'pdf' | 'audio' | 'archive'
   shared: number
   owner?: string
   location?: string

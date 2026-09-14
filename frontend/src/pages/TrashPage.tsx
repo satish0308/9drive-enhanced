@@ -110,6 +110,12 @@ export function TrashPage() {
     }
   }
 
+  async function handleEmptyTrash() {
+    if (files.length === 0) return
+    if (!confirm(`Are you sure you want to permanently delete all ${files.length} file(s) in the Recycle Bin from Google Drive? This action cannot be undone.`)) return
+    await handlePermanentDelete(files.map((f) => f.id))
+  }
+
   return (
     <>
       <PageHeader
@@ -125,6 +131,10 @@ export function TrashPage() {
                 <Trash2 className="h-4 w-4" /> Delete Selected ({selectedIds.size})
               </Button>
             </>
+          ) : files.length > 0 ? (
+            <Button variant="danger" onClick={handleEmptyTrash} disabled={loading}>
+              <Trash2 className="h-4 w-4" /> Empty Recycle Bin
+            </Button>
           ) : null
         }
       />

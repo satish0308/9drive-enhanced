@@ -1,4 +1,4 @@
-import { Copy, Edit3, FolderOpen, Scissors, Trash2, UserPlus } from 'lucide-react'
+import { ArrowRightLeft, Copy, Edit3, FolderOpen, Palette, Scissors, Trash2, UserPlus } from 'lucide-react'
 import type { FolderItem } from '@/data/drive-data'
 
 type Props = {
@@ -8,6 +8,8 @@ type Props = {
   onClose: () => void
   onCut: () => void
   onRename: () => void
+  onTransfer: () => void
+  onChangeAccountColor?: () => void
   onInvite: () => void
   onCopyLink: () => void
   onDelete: () => void
@@ -43,7 +45,7 @@ function MenuItem({ icon: Icon, label, onClick, danger = false, kbd }: { icon: R
   )
 }
 
-export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onInvite, onCopyLink, onDelete }: Props) {
+export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onTransfer, onChangeAccountColor, onInvite, onCopyLink, onDelete }: Props) {
   if (!folder) return null
   const safeX = Math.max(12, Math.min(x, window.innerWidth - 228))
   const safeY = Math.max(12, Math.min(y, window.innerHeight - 280))
@@ -81,6 +83,8 @@ export function FolderContextMenu({ x, y, folder, onClose, onCut, onRename, onIn
           <MenuItem icon={Copy} label="Copy Link" onClick={onCopyLink} />
           <MenuItem icon={Scissors} label="Cut" onClick={onCut} kbd="⌘X" />
           <MenuItem icon={Edit3} label="Rename" onClick={onRename} />
+          <MenuItem icon={ArrowRightLeft} label="Transfer Account" onClick={onTransfer} />
+          {onChangeAccountColor && <MenuItem icon={Palette} label="Drive Account Color" onClick={onChangeAccountColor} />}
           <MenuItem icon={UserPlus} label="Invite Member" onClick={onInvite} />
           <div className="my-1 h-px bg-slate-100 dark:bg-slate-800" />
           <MenuItem icon={Trash2} label="Delete Folder" onClick={onDelete} danger />

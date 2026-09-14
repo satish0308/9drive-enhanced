@@ -90,6 +90,25 @@ export async function ensureGoogleAppFolder(account: ConnectedAccount) {
   return folderId
 }
 
+export async function ensureGoogleSubfolder(account: ConnectedAccount, folderName: string, parentId: string) {
+  const auth = await getAuthedGoogleClient(account)
+  const drive = google.drive({ version: 'v3', auth })
+  const queryName = escapeDriveQueryValue(folderName)
+  const existing = await drive.files.list({
+    q: `name = '${queryName}' and mimeType = '${googleDriveFolderMimeType}' and '${parentId}' in parents and trashed = false`,
+    spaces: 'drive',
+    fields: 'files(id,name)',
+    pageSize: 1,
+  })
+  const folderId = existing.data.files?.[0]?.id ?? (await drive.files.create({
+    requestBody: { name: folderName, mimeType: googleDriveFolderMimeType, parents: [parentId] },
+    fields: 'id',
+  })).data.id
+
+  if (!folderId) throw new Error(`Failed to create Google Drive subfolder ${folderName}.`)
+  return folderId
+}
+
 export type GoogleAppFolderSyncResult = {
   accountId: string
   created: number
@@ -115,35 +134,66 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
     where: { userId, connectedAccountId: account.id, deletedAt: null },
     select: { id: true, providerFolderId: true }
   })
-  const parentIds = [
+  const allParentIds = [
+    'root',
     appFolderId,
     ...userFolders.map((f) => f.providerFolderId).filter((id): id is string => !!id)
   ]
 
   const driveFiles: DriveFileMetadata[] = []
-  let pageToken: string | undefined
+  const CHUNK_SIZE = 20
+  for (let i = 0; i < allParentIds.length; i += CHUNK_SIZE) {
+    const chunk = allParentIds.slice(i, i + CHUNK_SIZE)
+    const parentsQuery = chunk.map((id) => `'${id}' in parents`).join(' or ')
+    const q = `(${parentsQuery}) and mimeType != '${googleDriveFolderMimeType}' and trashed = false`
 
-  const parentsQuery = parentIds.map((id) => `'${id}' in parents`).join(' or ')
-  const q = `(${parentsQuery}) and mimeType != '${googleDriveFolderMimeType}' and trashed = false`
-
-  do {
-    const response = await drive.files.list({
-      q,
-      spaces: 'drive',
-      fields: 'nextPageToken,files(id,name,mimeType,size,parents)',
-      pageSize: 1000,
-      pageToken,
-    })
-    for (const file of response.data.files ?? []) {
-      if (!file.id || !file.name || !file.mimeType) continue
-      const parentId = file.parents?.[0] ?? appFolderId
-      driveFiles.push({ id: file.id, name: file.name, mimeType: file.mimeType, sizeBytes: BigInt(file.size ?? 0), parentId })
-    }
-    pageToken = response.data.nextPageToken ?? undefined
-  } while (pageToken)
+    let pageToken: string | undefined
+    do {
+      const response = await drive.files.list({
+        q,
+        spaces: 'drive',
+        fields: 'nextPageToken,files(id,name,mimeType,size,parents)',
+        pageSize: 1000,
+        pageToken,
+      })
+      for (const file of response.data.files ?? []) {
+        if (!file.id || !file.name || !file.mimeType) continue
+        const parentId = file.parents?.[0] ?? appFolderId
+        driveFiles.push({ id: file.id, name: file.name, mimeType: file.mimeType, sizeBytes: BigInt(file.size ?? 0), parentId })
+      }
+      pageToken = response.data.nextPageToken ?? undefined
+    } while (pageToken)
+  }
 
   const existingFiles = await prisma.file.findMany({ where: { userId, connectedAccountId: account.id, provider: 'google_drive' } })
-  const existingByProviderId = new Map(existingFiles.map((file) => [file.providerFileId, file]))
+
+  // Clean up any historical duplicate rows in MySQL for the same providerFileId
+  const filesByProviderId = new Map<string, typeof existingFiles>()
+  for (const f of existingFiles) {
+    const list = filesByProviderId.get(f.providerFileId) || []
+    list.push(f)
+    filesByProviderId.set(f.providerFileId, list)
+  }
+  const duplicateIdsToDelete: string[] = []
+  const uniqueExistingFiles: typeof existingFiles = []
+  for (const [_, list] of filesByProviderId) {
+    if (list.length > 1) {
+      const [keep, ...remove] = list.sort((a, b) => {
+        if (a.status === 'active' && b.status !== 'active') return -1
+        if (b.status === 'active' && a.status !== 'active') return 1
+        return b.createdAt.getTime() - a.createdAt.getTime()
+      })
+      uniqueExistingFiles.push(keep)
+      duplicateIdsToDelete.push(...remove.map((r) => r.id))
+    } else {
+      uniqueExistingFiles.push(list[0])
+    }
+  }
+  if (duplicateIdsToDelete.length > 0) {
+    await prisma.file.deleteMany({ where: { id: { in: duplicateIdsToDelete } } })
+  }
+
+  const existingByProviderId = new Map(uniqueExistingFiles.map((file) => [file.providerFileId, file]))
   const driveFileIds = new Set(driveFiles.map((file) => file.id))
   let created = 0
   let updated = 0
@@ -152,7 +202,8 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
   const folderIdMap = new Map(userFolders.map((f) => [f.providerFolderId, f.id]))
 
   for (const driveFile of driveFiles) {
-    const dbFolderId = driveFile.parentId === appFolderId ? null : (folderIdMap.get(driveFile.parentId) ?? null)
+    const isRoot = driveFile.parentId === appFolderId || driveFile.parentId === 'root'
+    const dbFolderId = isRoot ? null : (folderIdMap.get(driveFile.parentId) ?? null)
     const existing = existingByProviderId.get(driveFile.id)
     if (!existing) {
       await prisma.file.create({
@@ -172,7 +223,7 @@ export async function syncGoogleAppFolderFiles(accountId: string, userId: string
     }
   }
 
-  const missingActiveIds = existingFiles.filter((file) => file.status === 'active' && !driveFileIds.has(file.providerFileId)).map((file) => file.id)
+  const missingActiveIds = uniqueExistingFiles.filter((file) => file.status === 'active' && !driveFileIds.has(file.providerFileId)).map((file) => file.id)
   if (missingActiveIds.length > 0) {
     const result = await prisma.file.updateMany({ where: { id: { in: missingActiveIds }, userId }, data: { status: 'deleted', deletedAt: new Date() } })
     deleted = result.count

@@ -5,6 +5,7 @@ import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { getAuthedGoogleClient, syncGoogleQuota, ensureGoogleAppFolder } from '../google/google.service.js'
 import { createAuditLog } from '../../utils/audit.js'
+import { transferFolder } from '../files/file-transfer.service.js'
 
 export const folderRouter = Router()
 folderRouter.use(requireAuth)
@@ -21,8 +22,26 @@ const createSchema = z.object({
   parentId: z.string().nullable().optional(),
 })
 
-function serializeFolder(folder: { id: string; name: string; color: string; iconUrl?: string | null; parentId?: string | null; providerFolderId?: string | null; createdAt: Date; updatedAt: Date }) {
-  return { ...folder, providerFolderId: folder.providerFolderId ?? null, createdAt: folder.createdAt.toISOString(), updatedAt: folder.updatedAt.toISOString() }
+function serializeFolder(folder: {
+  id: string;
+  name: string;
+  color: string;
+  iconUrl?: string | null;
+  parentId?: string | null;
+  providerFolderId?: string | null;
+  connectedAccountId?: string | null;
+  connectedAccount?: { id: string; email: string; provider: string; color?: string | null } | null;
+  createdAt: Date;
+  updatedAt: Date
+}) {
+  return {
+    ...folder,
+    providerFolderId: folder.providerFolderId ?? null,
+    connectedAccountId: folder.connectedAccountId ?? null,
+    connectedAccount: folder.connectedAccount ?? null,
+    createdAt: folder.createdAt.toISOString(),
+    updatedAt: folder.updatedAt.toISOString()
+  }
 }
 
 async function ensureProviderFolderIds(
@@ -82,10 +101,40 @@ async function ensureProviderFolderIds(
 
 folderRouter.get('/', async (req: AuthRequest, res, next) => {
   try {
-    const query = z.object({ parentId: z.string().nullable().optional(), all: z.string().optional() }).parse(req.query)
+    const query = z.object({
+      parentId: z.string().nullable().optional(),
+      all: z.string().optional(),
+      accountId: z.string().optional(),
+      accountIds: z.string().optional(),
+    }).parse(req.query)
+
+    const accountIds = query.accountIds
+      ? query.accountIds.split(',').map((s) => s.trim()).filter(Boolean)
+      : query.accountId
+      ? [query.accountId]
+      : undefined
+
     const folders = await prisma.folder.findMany({
-      where: { userId: req.user!.id, deletedAt: null, ...(query.all === '1' ? {} : { parentId: query.parentId ?? null }) },
-      select: { id: true, name: true, color: true, iconUrl: true, parentId: true, providerFolderId: true, createdAt: true, updatedAt: true },
+      where: {
+        userId: req.user!.id,
+        deletedAt: null,
+        ...(query.all === '1' ? {} : { parentId: query.parentId ?? null }),
+        ...(accountIds && accountIds.length > 0 ? { connectedAccountId: { in: accountIds } } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        color: true,
+        iconUrl: true,
+        parentId: true,
+        providerFolderId: true,
+        connectedAccountId: true,
+        connectedAccount: {
+          select: { id: true, email: true, provider: true, color: true }
+        },
+        createdAt: true,
+        updatedAt: true
+      },
       orderBy: { updatedAt: 'desc' },
     })
     await ensureProviderFolderIds(folders, req.user!.id)
@@ -100,7 +149,20 @@ folderRouter.get('/recent', async (req: AuthRequest, res, next) => {
     const limit = Math.min(Number(req.query.limit ?? 4), 4)
     const folders = await prisma.folder.findMany({
       where: { userId: req.user!.id, deletedAt: null },
-      select: { id: true, name: true, color: true, iconUrl: true, parentId: true, providerFolderId: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        color: true,
+        iconUrl: true,
+        parentId: true,
+        providerFolderId: true,
+        connectedAccountId: true,
+        connectedAccount: {
+          select: { id: true, email: true, provider: true, color: true }
+        },
+        createdAt: true,
+        updatedAt: true
+      },
       orderBy: { updatedAt: 'desc' },
       take: limit,
     })
@@ -154,13 +216,26 @@ folderRouter.post('/', async (req: AuthRequest, res, next) => {
       data: {
         userId: req.user!.id,
         name: body.name,
-        color: body.color ?? defaultFolderColor,
+        color: body.color ?? connectedAccount?.color ?? defaultFolderColor,
         iconUrl: body.iconUrl ?? defaultFolderIconUrl,
         parentId: body.parentId ?? null,
         providerFolderId,
         connectedAccountId: connectedAccount?.id ?? null
       },
-      select: { id: true, name: true, color: true, iconUrl: true, parentId: true, providerFolderId: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        name: true,
+        color: true,
+        iconUrl: true,
+        parentId: true,
+        providerFolderId: true,
+        connectedAccountId: true,
+        connectedAccount: {
+          select: { id: true, email: true, provider: true, color: true }
+        },
+        createdAt: true,
+        updatedAt: true
+      },
     })
     await createAuditLog(req.user!.id, 'CREATE_FOLDER', 'folder', folder.id, { name: folder.name })
     return res.status(201).json({ folder: serializeFolder(folder) })
@@ -246,7 +321,7 @@ folderRouter.patch('/:id', async (req: AuthRequest, res, next) => {
     if (folder.count === 0) return res.status(404).json({ code: 'FOLDER_NOT_FOUND', message: 'Folder not found.' })
     const updated = await prisma.folder.findFirstOrThrow({
       where: { id: folderId, userId: req.user!.id },
-      select: { id: true, name: true, color: true, iconUrl: true, parentId: true, providerFolderId: true, createdAt: true, updatedAt: true },
+      select: { id: true, name: true, color: true, iconUrl: true, parentId: true, providerFolderId: true, connectedAccountId: true, createdAt: true, updatedAt: true },
     })
     await createAuditLog(req.user!.id, 'UPDATE_FOLDER', 'folder', updated.id, { name: updated.name, updates: body })
     return res.json({ folder: serializeFolder(updated) })
@@ -310,3 +385,14 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
     return next(error)
   }
 })
+
+folderRouter.post('/:id/transfer', async (req: AuthRequest, res, next) => {
+  try {
+    const body = z.object({ targetAccountId: z.string().min(1) }).parse(req.body)
+    const result = await transferFolder(String(req.params.id), body.targetAccountId, req.user!.id)
+    return res.json(result)
+  } catch (error) {
+    return next(error)
+  }
+})
+

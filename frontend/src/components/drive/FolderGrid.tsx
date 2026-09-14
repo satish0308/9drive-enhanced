@@ -85,7 +85,18 @@ export function FolderGrid({
             'group relative flex cursor-pointer flex-col items-center justify-center transition hover:-translate-y-1 hover:shadow-xl',
             cfg.card,
           )}
+          style={{
+            borderColor: folder.accountColor ? `${folder.accountColor}40` : undefined,
+          }}
         >
+          {/* Top color indicator bar for base account */}
+          {folder.accountColor && (
+            <span
+              className="absolute top-0 inset-x-4 h-1 rounded-b-full transition-opacity group-hover:h-1.5"
+              style={{ backgroundColor: folder.accountColor }}
+            />
+          )}
+
           <button
             className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 sm:right-3 sm:top-3"
             onClick={(event) => { event.stopPropagation(); onFolderMenu?.(event, folder) }}
@@ -96,6 +107,22 @@ export function FolderGrid({
           <FolderVisual folder={folder} className={cn('transition group-hover:scale-110', cfg.icon)} />
           <h2 className={cn('line-clamp-2 text-center font-extrabold leading-tight', cfg.title)}>{folder.name}</h2>
           <p className={cn('line-clamp-1 text-center text-slate-500', cfg.sub)}>{folder.updated}</p>
+
+          {/* Account indicator badge */}
+          {folder.accountEmail && (
+            <span
+              className="mt-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold border transition-transform"
+              style={{
+                borderColor: folder.accountColor ? `${folder.accountColor}40` : '#cbd5e1',
+                backgroundColor: folder.accountColor ? `${folder.accountColor}15` : '#f1f5f9',
+                color: folder.accountColor || '#475569',
+              }}
+              title={`Stored on account: ${folder.accountEmail}`}
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: folder.accountColor || '#64748b' }} />
+              <span className="truncate max-w-[110px]">{folder.accountEmail.split('@')[0]}</span>
+            </span>
+          )}
         </Card>
       ))}
     </div>

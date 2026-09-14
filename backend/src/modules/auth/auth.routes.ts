@@ -8,6 +8,7 @@ import { hashPassword, verifyPassword } from '../../utils/password.js'
 import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { signAccessToken } from '../../utils/jwt.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
+import { importAllFromGoogleDrive } from '../google/google-import.service.js'
 
 export const authRouter = Router()
 
@@ -144,6 +145,9 @@ authRouter.get('/google/callback', async (req, res) => {
 
     await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date(), userId: user.id } })
     await syncGoogleQuota(account.id).catch(() => undefined)
+    importAllFromGoogleDrive(account.id, user.id).catch((err) => {
+      console.warn('[googleAuth] auto-import warning:', err)
+    })
 
     const handoffToken = randomToken()
     await prisma.authHandoff.create({ data: { userId: user.id, tokenHash: hashToken(handoffToken), expiresAt: new Date(Date.now() + 5 * 60_000) } })

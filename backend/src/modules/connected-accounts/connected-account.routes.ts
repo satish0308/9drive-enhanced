@@ -8,6 +8,7 @@ import { decryptText, encryptText, hashToken, randomToken } from '../../utils/cr
 import { hashPassword } from '../../utils/password.js'
 import { createOAuthClient, syncGoogleQuota } from '../google/google.service.js'
 import { syncS3Quota, testS3Connection } from '../s3/s3.service.js'
+import { browseGoogleDrive, importGoogleDriveItems, importAllFromGoogleDrive } from '../google/google-import.service.js'
 
 export const connectedAccountRouter = Router()
 
@@ -45,9 +46,26 @@ connectedAccountRouter.get('/', requireAuth, async (req: AuthRequest, res, next)
       })
       : accounts
 
+    const [fileCounts, folderCounts] = await Promise.all([
+      prisma.file.groupBy({
+        by: ['connectedAccountId'],
+        where: { userId: req.user!.id, status: 'active' },
+        _count: { id: true }
+      }),
+      prisma.folder.groupBy({
+        by: ['connectedAccountId'],
+        where: { userId: req.user!.id, deletedAt: null, connectedAccountId: { not: null } },
+        _count: { id: true }
+      })
+    ])
+    const fileCountMap = new Map(fileCounts.map((fc) => [fc.connectedAccountId, fc._count.id]))
+    const folderCountMap = new Map(folderCounts.map((fc) => [fc.connectedAccountId!, fc._count.id]))
+
     return res.json({
       accounts: syncedAccounts.map(({ accessTokenEncrypted: _a, refreshTokenEncrypted: _r, storageAccount, ...account }) => ({
         ...account,
+        fileCount: fileCountMap.get(account.id) ?? 0,
+        folderCount: folderCountMap.get(account.id) ?? 0,
         storageAccount: storageAccount ? {
           ...storageAccount,
           totalBytes: storageAccount.totalBytes?.toString() ?? null,
@@ -233,6 +251,9 @@ connectedAccountRouter.get('/google/callback', async (req, res, next) => {
       })
       await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date(), userId: user.id } })
       await syncGoogleQuota(account.id).catch(() => undefined)
+      importAllFromGoogleDrive(account.id, user.id).catch((err) => {
+        console.warn('[connectGoogleDrive] auto-import error:', err)
+      })
       const handoffToken = randomToken()
       await prisma.authHandoff.create({ data: { userId: user.id, tokenHash: hashToken(handoffToken), expiresAt: new Date(Date.now() + 5 * 60_000) } })
       return res.redirect(`${env.FRONTEND_URL}/google-auth?token=${handoffToken}`)
@@ -273,6 +294,9 @@ connectedAccountRouter.get('/google/callback', async (req, res, next) => {
     })
     await prisma.oauthState.update({ where: { id: oauthState.id }, data: { usedAt: new Date() } })
     await syncGoogleQuota(account.id)
+    importAllFromGoogleDrive(account.id, oauthState.userId).catch((err) => {
+      console.warn('[connectGoogleDrive] auto-import error:', err)
+    })
     return res.redirect(`${env.FRONTEND_URL}/google-connected?status=success`)
   } catch (error) {
     console.error('Google OAuth callback failed:', error)
@@ -308,3 +332,71 @@ connectedAccountRouter.delete('/:id', requireAuth, async (req: AuthRequest, res,
     return next(error)
   }
 })
+
+connectedAccountRouter.get('/:id/drive/browse', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const accountId = String(req.params.id)
+    const folderId = typeof req.query.folderId === 'string' && req.query.folderId ? req.query.folderId : 'root'
+    const result = await browseGoogleDrive(accountId, req.user!.id, folderId)
+    return res.json(result)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+connectedAccountRouter.post('/:id/drive/import', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const accountId = String(req.params.id)
+    const body = z.object({
+      folderIds: z.array(z.string()).default([]),
+      fileIds: z.array(z.string()).default([]),
+      targetVirtualFolderId: z.string().nullable().optional(),
+    }).parse(req.body)
+    const result = await importGoogleDriveItems(accountId, req.user!.id, body.folderIds, body.fileIds, body.targetVirtualFolderId)
+    return res.json(result)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+connectedAccountRouter.post('/:id/drive/import-all', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const accountId = String(req.params.id)
+    const result = await importAllFromGoogleDrive(accountId, req.user!.id)
+    return res.json(result)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+connectedAccountRouter.patch('/:id/color', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const accountId = String(req.params.id)
+    const body = z.object({
+      color: z.string().regex(/^(#[0-9a-fA-F]{6}|text-[a-z]+-[0-9]+)$/).max(64),
+      updateExistingFolders: z.boolean().optional().default(true),
+    }).parse(req.body)
+
+    const account = await prisma.connectedAccount.findFirstOrThrow({
+      where: { id: accountId, userId: req.user!.id }
+    })
+
+    const updated = await prisma.connectedAccount.update({
+      where: { id: account.id },
+      data: { color: body.color },
+      select: { id: true, email: true, provider: true, color: true }
+    })
+
+    if (body.updateExistingFolders) {
+      await prisma.folder.updateMany({
+        where: { connectedAccountId: account.id, userId: req.user!.id, deletedAt: null },
+        data: { color: body.color }
+      })
+    }
+
+    return res.json({ account: updated })
+  } catch (error) {
+    return next(error)
+  }
+})
+

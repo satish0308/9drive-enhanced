@@ -148,6 +148,7 @@ model ConnectedAccount {
   scopes                Json
   status                String          @default("connected") @db.VarChar(32)
   lastError             String?         @map("last_error") @db.Text
+  color                 String?         @db.VarChar(64)
   createdAt             DateTime        @default(now()) @map("created_at")
   updatedAt             DateTime        @updatedAt @map("updated_at")
   user                  User            @relation(fields: [userId], references: [id], onDelete: Cascade)

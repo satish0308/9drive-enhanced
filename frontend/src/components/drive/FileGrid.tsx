@@ -105,7 +105,17 @@ export function FileGrid({
                 : 'relative cursor-grab active:cursor-grabbing overflow-hidden transition hover:-translate-y-0.5 hover:shadow-md',
               cfg.card
             )}
+            style={{
+              borderColor: file.accountColor ? `${file.accountColor}35` : undefined,
+            }}
           >
+            {file.accountColor && (
+              <span
+                className="absolute top-0 inset-x-3 h-0.5 rounded-b-full transition-all group-hover:h-1"
+                style={{ backgroundColor: file.accountColor }}
+              />
+            )}
+
             <div className="flex items-start justify-between gap-2">
               <input type="checkbox" className={cn("shrink-0 accent-blue-600", cfg.checkbox)} checked={selected} onChange={() => onToggleFile?.(file)} onClick={(event) => event.stopPropagation()} />
               <button className={cn("flex shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-white/80", cfg.menuBtn)} onClick={(event) => { event.stopPropagation(); onFileContextMenu?.(event, file) }} aria-label={`Open ${file.name} menu`}><MoreVertical className="h-4 w-4" /></button>
@@ -120,9 +130,22 @@ export function FileGrid({
             <div className={cn("min-w-0 text-center", cfg.mtCard)}>
               <h3 className={cn("font-extrabold text-slate-950 line-clamp-2", cfg.title)} title={file.name}>{file.name}</h3>
               <p className={cfg.date}>{file.date}</p>
-              <div className={cn("flex flex-wrap justify-center font-semibold text-slate-600", cfg.tagsShell)}>
+              <div className={cn("flex flex-wrap justify-center font-semibold text-slate-600 gap-1.5", cfg.tagsShell)}>
                 <span className={cn("rounded-full bg-slate-100", cfg.tag)}>{file.size}</span>
-                <span className={cn("max-w-full truncate rounded-full bg-slate-100", cfg.tag)}>{file.access}</span>
+                <span
+                  className={cn("max-w-full truncate rounded-full px-2 py-0.5 text-[10px] font-semibold border")}
+                  style={file.accountColor ? {
+                    backgroundColor: `${file.accountColor}15`,
+                    borderColor: `${file.accountColor}35`,
+                    color: file.accountColor,
+                  } : {
+                    backgroundColor: '#f1f5f9',
+                    color: '#475569',
+                  }}
+                  title={`Account: ${file.accountEmail || file.access}`}
+                >
+                  ● {file.accountEmail ? file.accountEmail.split('@')[0] : file.access}
+                </span>
               </div>
             </div>
           </Card>

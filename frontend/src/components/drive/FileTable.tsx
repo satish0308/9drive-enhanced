@@ -88,8 +88,27 @@ export function FileTable({ files, mode = 'default', selectedFileIds = new Set<s
                 {mode === 'starred' ? <td className="py-2.5 text-slate-500">{file.starredDate}</td> : null}
                 {mode === 'archived' ? <td className="py-2.5 text-slate-500">{file.archivedDate}</td> : null}
                 <td className="py-2.5 text-slate-500">{mode === 'archived' ? file.location : file.date}</td>
-                <td className="py-2.5 text-slate-500">{file.size}</td>
-                <td className="py-2.5 text-slate-500"><span className="flex items-center gap-2"><AvatarStack count={file.shared} />{file.access}</span></td>
+                <td className="py-2.5 text-slate-500">
+                  <span className="flex items-center gap-2">
+                    <AvatarStack count={file.shared} />
+                    {file.accountColor ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold border"
+                        style={{
+                          borderColor: `${file.accountColor}40`,
+                          backgroundColor: `${file.accountColor}15`,
+                          color: file.accountColor,
+                        }}
+                        title={`Account: ${file.accountEmail || file.access}`}
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: file.accountColor }} />
+                        <span className="truncate max-w-[120px]">{file.accountEmail ? file.accountEmail.split('@')[0] : file.access}</span>
+                      </span>
+                    ) : (
+                      file.access
+                    )}
+                  </span>
+                </td>
                 <td className="py-2.5 text-right">
                   <div className="flex items-center justify-end gap-1.5">
                     {/* Hover shortcuts */}

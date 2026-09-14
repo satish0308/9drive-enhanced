@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Archive, CheckCircle, ClipboardPaste, Download, FolderInput, FolderPlus, LayoutGrid, List, RefreshCw, Star, Trash2, Upload, X } from 'lucide-react'
+import { ArrowRightLeft, CheckCircle, ClipboardPaste, CloudDownload, Download, FolderInput, FolderPlus, FolderSearch, HardDrive, LayoutGrid, List, RefreshCw, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { DummyModal } from '@/components/drive/DummyModal'
@@ -12,7 +12,12 @@ import { FileTable } from '@/components/drive/FileTable'
 import { FolderContextMenu } from '@/components/drive/FolderContextMenu'
 import { FolderGrid, type FolderSizeScale } from '@/components/drive/FolderGrid'
 import { defaultFolderColor, defaultFolderIconUrl, folderColorOptions, folderIconOptions, normalizeFolderColor } from '@/components/drive/FolderVisual'
+import { GoogleDriveImportModal } from '@/components/drive/GoogleDriveImportModal'
 import { PageHeader } from '@/components/drive/PageHeader'
+import { TransferModal, type ConnectedAccountInfo } from '@/components/drive/TransferModal'
+import { DriveSelectorBar } from '@/components/drive/DriveSelectorBar'
+import { AccountColorPickerModal, getAccountColor } from '@/components/drive/AccountColorPickerModal'
+import { BulkTypeSelector, FILE_KIND_DEFINITIONS } from '@/components/drive/BulkTypeSelector'
 import { Input } from '@/components/ui/input'
 import { API_URL, apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
@@ -22,9 +27,9 @@ import type { FileItem, FolderItem } from '@/data/drive-data'
 import { useUpload } from '@/context/UploadContext'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
 
-type BackendFile = { id: string; name: string; mimeType: string; sizeBytes: string; createdAt: string; folderId?: string | null; connectedAccount?: { email: string; provider: string }; folder?: { id: string; name: string } | null }
-type BackendFolder = { id: string; name: string; color: string; iconUrl?: string | null; parentId?: string | null; providerFolderId?: string | null; updatedAt: string }
-type ConnectedAccount = { id: string; provider: string; email: string; displayName?: string | null; status: string }
+type BackendFile = { id: string; name: string; mimeType: string; sizeBytes: string; createdAt: string; folderId?: string | null; connectedAccountId?: string; connectedAccount?: { id?: string; email: string; provider: string; color?: string | null }; folder?: { id: string; name: string } | null }
+type BackendFolder = { id: string; name: string; color: string; iconUrl?: string | null; parentId?: string | null; providerFolderId?: string | null; connectedAccountId?: string | null; connectedAccount?: { id?: string; email: string; provider: string; color?: string | null } | null; updatedAt: string }
+type ConnectedAccount = ConnectedAccountInfo
 
 const sizeActiveClasses: Record<FolderSizeScale, string> = {
   xs: 'bg-white text-slate-800 dark:bg-red-500/20 dark:text-red-300 dark:border-red-500/30 shadow-sm dark:shadow-none',
@@ -45,7 +50,9 @@ function getStoredFileViewMode(): FileViewMode {
 function mimeToKind(mimeType: string): FileItem['kind'] {
   if (mimeType.startsWith('image/')) return 'image'
   if (mimeType.startsWith('video/')) return 'video'
+  if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType.includes('pdf')) return 'pdf'
+  if (mimeType.includes('zip') || mimeType.includes('tar') || mimeType.includes('rar') || mimeType.includes('7z') || mimeType.includes('compressed')) return 'archive'
   return 'doc'
 }
 
@@ -55,11 +62,42 @@ function providerLabel(provider: string | undefined) {
 }
 
 function mapFile(file: BackendFile): FileItem {
-  return { id: file.id, name: file.name, mimeType: file.mimeType, sizeBytes: file.sizeBytes, createdAt: file.createdAt, accountEmail: file.connectedAccount?.email, accountProvider: providerLabel(file.connectedAccount?.provider), date: formatDate(file.createdAt), size: formatBytes(file.sizeBytes), access: file.connectedAccount?.email ?? providerLabel(file.connectedAccount?.provider), kind: mimeToKind(file.mimeType), shared: 1, folderId: file.folderId, folderName: file.folder?.name }
+  const accColor = file.connectedAccount?.color || (file.connectedAccount ? getAccountColor(file.connectedAccount) : undefined)
+  return {
+    id: file.id,
+    name: file.name,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    createdAt: file.createdAt,
+    accountEmail: file.connectedAccount?.email,
+    accountProvider: providerLabel(file.connectedAccount?.provider),
+    accountColor: accColor,
+    connectedAccountId: file.connectedAccount?.id || file.connectedAccountId,
+    date: formatDate(file.createdAt),
+    size: formatBytes(file.sizeBytes),
+    access: file.connectedAccount?.email ?? providerLabel(file.connectedAccount?.provider),
+    kind: mimeToKind(file.mimeType),
+    shared: 1,
+    folderId: file.folderId,
+    folderName: file.folder?.name
+  }
 }
 
 function mapFolder(folder: BackendFolder): FolderItem {
-  return { id: folder.id, name: folder.name, color: folder.color, iconUrl: folder.iconUrl, parentId: folder.parentId, providerFolderId: folder.providerFolderId, updated: `Updated ${formatDate(folder.updatedAt)}` }
+  const accColor = folder.connectedAccount?.color || (folder.connectedAccount ? getAccountColor(folder.connectedAccount) : undefined)
+  const resolvedColor = normalizeFolderColor(folder.color) || accColor || defaultFolderColor
+  return {
+    id: folder.id,
+    name: folder.name,
+    color: resolvedColor,
+    iconUrl: folder.iconUrl,
+    parentId: folder.parentId,
+    providerFolderId: folder.providerFolderId,
+    connectedAccountId: folder.connectedAccountId,
+    accountEmail: folder.connectedAccount?.email,
+    accountColor: accColor || resolvedColor,
+    updated: `Updated ${formatDate(folder.updatedAt)}`
+  }
 }
 
 
@@ -81,11 +119,13 @@ export function AllFilesPage() {
   const searchQuery = searchParams.get('q')?.trim() ?? ''
   const [uploadOpen, setUploadOpen] = useState(false)
   const [folderOpen, setFolderOpen] = useState(false)
+  const [importDriveOpen, setImportDriveOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [folderRenameOpen, setFolderRenameOpen] = useState(false)
   const [folderDeleteOpen, setFolderDeleteOpen] = useState(false)
   const [moveOpen, setMoveOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [permanentDelete, setPermanentDelete] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
@@ -136,13 +176,201 @@ export function AllFilesPage() {
   const { setHeaderActions } = useDriveLayoutActions()
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([])
   const [selectedTargetAccountId, setSelectedTargetAccountId] = useState('')
+  const [driveSelectionVisible, setDriveSelectionVisible] = useState<boolean>(() => {
+    return localStorage.getItem('9drive:drive-selection-visible') !== 'false'
+  })
+  const [enabledAccountIds, setEnabledAccountIds] = useState<Set<string>>(new Set())
+  const [accountColorPickerOpen, setAccountColorPickerOpen] = useState(false)
+  const [accountForColorPicker, setAccountForColorPicker] = useState<ConnectedAccount | null>(null)
 
   function changeFolderSize(scale: FolderSizeScale) {
     setFolderSizeScale(scale)
     localStorage.setItem('9drive:folder-size', scale)
   }
 
-  async function loadFiles() {
+  const folderCountByAccount = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const f of allFolders) {
+      const accId = f.connectedAccountId
+      if (accId) counts[accId] = (counts[accId] || 0) + 1
+    }
+    return counts
+  }, [allFolders])
+
+  const fileCountByAccount = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const f of files) {
+      const accId = f.connectedAccountId
+      if (accId) counts[accId] = (counts[accId] || 0) + 1
+    }
+    return counts
+  }, [files])
+
+  function toggleDriveSelectionVisible() {
+    setDriveSelectionVisible((prev) => {
+      const next = !prev
+      localStorage.setItem('9drive:drive-selection-visible', String(next))
+      return next
+    })
+  }
+
+  function toggleDriveAccount(accountId: string) {
+    setEnabledAccountIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(accountId)) {
+        next.delete(accountId)
+      } else {
+        next.add(accountId)
+      }
+      loadAll(next).catch(() => undefined)
+      return next
+    })
+  }
+
+  function enableAllDriveAccounts() {
+    const all = new Set(connectedAccounts.map((a) => a.id))
+    setEnabledAccountIds(all)
+    loadAll(all).catch(() => undefined)
+  }
+
+  function onlyDriveAccount(accountId: string) {
+    const single = new Set([accountId])
+    setEnabledAccountIds(single)
+    loadAll(single).catch(() => undefined)
+  }
+
+  function openAccountColorPicker(account: ConnectedAccount) {
+    setAccountForColorPicker(account)
+    setAccountColorPickerOpen(true)
+  }
+
+  function openFolderAccountColorPicker(folder: FolderItem | null) {
+    if (!folder) return
+    const acc = connectedAccounts.find(
+      (a) => a.id === folder.connectedAccountId || (folder.accountEmail && a.email === folder.accountEmail)
+    )
+    if (acc) {
+      openAccountColorPicker(acc)
+    } else if (connectedAccounts.length > 0) {
+      openAccountColorPicker(connectedAccounts[0])
+    }
+    setFolderContextMenu({ x: 0, y: 0, folder: null })
+  }
+
+  function handleAccountColorSaved(accountId: string, newColor: string) {
+    setConnectedAccounts((prev) =>
+      prev.map((acc) => (acc.id === accountId ? { ...acc, color: newColor } : acc))
+    )
+    setFolders((prev) =>
+      prev.map((f) =>
+        f.connectedAccountId === accountId
+          ? { ...f, color: newColor, accountColor: newColor }
+          : f
+      )
+    )
+    setAllFolders((prev) =>
+      prev.map((f) =>
+        f.connectedAccountId === accountId
+          ? { ...f, color: newColor, accountColor: newColor }
+          : f
+      )
+    )
+    setFiles((prev) =>
+      prev.map((file) =>
+        file.connectedAccountId === accountId
+          ? { ...file, accountColor: newColor }
+          : file
+      )
+    )
+    setMessage('Drive account folder color updated successfully.')
+    setTimeout(() => setMessage(''), 3000)
+    loadAll().catch(() => undefined)
+  }
+
+  function handleSelectDataType(kindKey: string, action: 'select' | 'toggle' | 'deselect') {
+    const def = FILE_KIND_DEFINITIONS.find((d) => d.key === kindKey)
+    if (!def) return
+    const matchingIds = files.filter(def.filter).map((f) => f.id).filter(Boolean) as string[]
+    if (matchingIds.length === 0) return
+
+    setSelectedFileIds((prev) => {
+      const next = new Set(prev)
+      if (action === 'deselect') {
+        matchingIds.forEach((id) => next.delete(id))
+      } else if (action === 'select') {
+        matchingIds.forEach((id) => next.add(id))
+      } else {
+        const allMatchingSelected = matchingIds.every((id) => next.has(id))
+        if (allMatchingSelected) {
+          matchingIds.forEach((id) => next.delete(id))
+        } else {
+          matchingIds.forEach((id) => next.add(id))
+        }
+      }
+      return next
+    })
+  }
+
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferring, setTransferring] = useState(false)
+  const [transferTarget, setTransferTarget] = useState<{
+    type: 'file' | 'folder' | 'batch'
+    file?: FileItem | null
+    folder?: FolderItem | null
+    fileIds?: string[]
+  }>({ type: 'file' })
+
+  function openFileTransfer(file: FileItem) {
+    setActiveFile(file)
+    setTransferTarget({ type: 'file', file })
+    setContextMenu({ x: 0, y: 0, file: null })
+    setTransferOpen(true)
+  }
+
+  function openFolderTransfer(folder: FolderItem) {
+    setActiveFolderForMenu(folder)
+    setTransferTarget({ type: 'folder', folder })
+    setFolderContextMenu({ x: 0, y: 0, folder: null })
+    setTransferOpen(true)
+  }
+
+  function openBatchTransfer() {
+    setTransferTarget({ type: 'batch', fileIds: Array.from(selectedFileIds) })
+    setTransferOpen(true)
+  }
+
+  async function executeTransfer(targetAccountId: string) {
+    setTransferring(true)
+    setMessage('')
+    try {
+      if (transferTarget.type === 'file' && transferTarget.file?.id) {
+        await apiFetch(`/files/${transferTarget.file.id}/transfer`, {
+          method: 'POST',
+          body: JSON.stringify({ targetAccountId }),
+        })
+        setMessage(`Transferred "${transferTarget.file.name}" successfully.`)
+      } else if (transferTarget.type === 'folder' && transferTarget.folder?.id) {
+        const res = await apiFetch<{ transferredCount: number; failedCount: number }>(`/folders/${transferTarget.folder.id}/transfer`, {
+          method: 'POST',
+          body: JSON.stringify({ targetAccountId }),
+        })
+        setMessage(`Folder transferred: ${res.transferredCount} file(s) moved${res.failedCount ? `, ${res.failedCount} failed` : ''}.`)
+      } else if (transferTarget.type === 'batch' && transferTarget.fileIds && transferTarget.fileIds.length > 0) {
+        const res = await apiFetch<{ transferredCount: number; failedCount: number }>(`/files/batch-transfer`, {
+          method: 'POST',
+          body: JSON.stringify({ fileIds: transferTarget.fileIds, targetAccountId }),
+        })
+        setMessage(`Batch transferred: ${res.transferredCount} file(s) moved${res.failedCount ? `, ${res.failedCount} failed` : ''}.`)
+        setSelectedFileIds(new Set())
+      }
+      await loadAll()
+      window.dispatchEvent(new Event('9drive:storage-changed'))
+    } finally {
+      setTransferring(false)
+    }
+  }
+
+  async function loadFiles(accountFilterIds?: Set<string>) {
     const params = new URLSearchParams()
     if (activeFolderId) params.set('folderId', activeFolderId)
     if (searchQuery) params.set('q', searchQuery)
@@ -162,14 +390,36 @@ export function AllFilesPage() {
     if (startDate) params.set('startDate', startDate)
     if (endDate) params.set('endDate', endDate)
 
+    const targetAccountIds = accountFilterIds ?? enabledAccountIds
+    if (connectedAccounts.length > 0 && targetAccountIds.size < connectedAccounts.length) {
+      if (targetAccountIds.size === 0) {
+        setFiles([])
+        return
+      }
+      params.set('accountIds', Array.from(targetAccountIds).join(','))
+    }
+
     const query = params.toString()
     const path = query ? `/files?${query}` : '/files'
     const data = await apiFetch<{ files: BackendFile[] }>(path)
     setFiles(data.files.map(mapFile))
   }
 
-  async function loadFolders() {
-    const visiblePath = activeFolderId ? `/folders?parentId=${activeFolderId}` : '/folders'
+  async function loadFolders(accountFilterIds?: Set<string>) {
+    const params = new URLSearchParams()
+    if (activeFolderId) params.set('parentId', activeFolderId)
+
+    const targetAccountIds = accountFilterIds ?? enabledAccountIds
+    if (connectedAccounts.length > 0 && targetAccountIds.size < connectedAccounts.length) {
+      if (targetAccountIds.size === 0) {
+        setFolders([])
+        return
+      }
+      params.set('accountIds', Array.from(targetAccountIds).join(','))
+    }
+
+    const query = params.toString()
+    const visiblePath = query ? `/folders?${query}` : '/folders'
     const [visibleData, allData] = await Promise.all([
       apiFetch<{ folders: BackendFolder[] }>(visiblePath),
       apiFetch<{ folders: BackendFolder[] }>('/folders?all=1'),
@@ -178,8 +428,8 @@ export function AllFilesPage() {
     setAllFolders(allData.folders.map(mapFolder))
   }
 
-  async function loadAll() {
-    await Promise.all([loadFiles(), loadFolders()])
+  async function loadAll(accountFilterIds?: Set<string>) {
+    await Promise.all([loadFiles(accountFilterIds), loadFolders(accountFilterIds)])
   }
 
   async function handleDropItem(fileId: string, targetFolderId: string) {
@@ -211,7 +461,14 @@ export function AllFilesPage() {
     async function loadConnectedAccounts() {
       try {
         const data = await apiFetch<{ accounts: ConnectedAccount[] }>('/connected-accounts')
-        setConnectedAccounts(data.accounts || [])
+        const accs = data.accounts || []
+        setConnectedAccounts(accs)
+        setEnabledAccountIds((prev) => {
+          if (prev.size === 0) {
+            return new Set(accs.map((a) => a.id))
+          }
+          return prev
+        })
       } catch (error) {
         console.error('Failed to load connected accounts:', error)
       }
@@ -304,7 +561,7 @@ export function AllFilesPage() {
     setSyncingDrive(true)
     setMessage('')
     try {
-      const response = await apiFetch<{ results: { created: number; updated: number; deleted: number }[] }>('/files/sync-google', { method: 'POST', body: JSON.stringify({}) })
+      const response = await apiFetch<{ results: { created: number; updated: number; deleted: number }[] }>('/files/sync-google', { method: 'POST', body: JSON.stringify({ fullSync: true }) })
 
       let created = 0, updated = 0, deleted = 0
       for (const res of response.results) {
@@ -314,7 +571,7 @@ export function AllFilesPage() {
       }
       const accounts = response.results.length
 
-      setMessage(`Google Drive synced. ${created} added, ${updated} updated, ${deleted} removed across ${accounts} account${accounts === 1 ? '' : 's'}.`)
+      setMessage(`Google Drive synced. Discovered and updated files and folders across ${accounts} account${accounts === 1 ? '' : 's'}.`)
       await loadAll()
       window.dispatchEvent(new Event('9drive:storage-changed'))
     } catch (error) {
@@ -488,10 +745,20 @@ export function AllFilesPage() {
 
   async function deleteFile() {
     const selectedIds = [...selectedFileIds]
-    if (selectedIds.length > 0) await apiFetch('/files/batch', { method: 'DELETE', body: JSON.stringify({ fileIds: selectedIds }) })
-    else if (activeFile?.id) await apiFetch(`/files/${activeFile.id}`, { method: 'DELETE' })
-    else return
+    if (selectedIds.length > 0) {
+      await apiFetch('/files/batch', {
+        method: 'DELETE',
+        body: JSON.stringify({ fileIds: selectedIds, permanent: permanentDelete })
+      })
+    } else if (activeFile?.id) {
+      await apiFetch(`/files/${activeFile.id}${permanentDelete ? '?permanent=true' : ''}`, {
+        method: 'DELETE'
+      })
+    } else {
+      return
+    }
     setDeleteOpen(false)
+    setPermanentDelete(false)
     clearSelection()
     await loadFiles()
     window.dispatchEvent(new Event('9drive:storage-changed'))
@@ -630,6 +897,22 @@ export function AllFilesPage() {
     const sizeLabels: FolderSizeScale[] = ['xs', 'sm', 'md', 'lg']
     setHeaderActions(
       <div className="flex items-center gap-2">
+        {/* Drive selector toggle in header */}
+        {connectedAccounts.length > 0 && (
+          <Button
+            size="sm"
+            variant={driveSelectionVisible ? 'soft' : 'outline'}
+            onClick={toggleDriveSelectionVisible}
+            title={driveSelectionVisible ? 'Hide Drive Selection in Top Grid' : 'Show Drive Selection in Top Grid'}
+            className="hidden sm:inline-flex items-center gap-1.5"
+          >
+            <HardDrive className="h-3.5 w-3.5 text-blue-600" />
+            <span>Drives</span>
+            <span className="text-[11px] font-mono px-1 rounded bg-slate-200/60 dark:bg-slate-700/60">
+              {enabledAccountIds.size}/{connectedAccounts.length}
+            </span>
+          </Button>
+        )}
         {/* Folder size scale picker */}
         <div className="hidden sm:flex items-center gap-0.5 rounded-xl border border-slate-200 bg-slate-50 p-0.5">
           {sizeLabels.map((s) => (
@@ -658,13 +941,16 @@ export function AllFilesPage() {
         <Button size="sm" variant="outline" onClick={() => setFolderOpen(true)}>
           <FolderPlus className="h-3.5 w-3.5" />New Folder
         </Button>
+        <Button size="sm" variant="outline" onClick={() => setImportDriveOpen(true)}>
+          <CloudDownload className="h-3.5 w-3.5" />Import Drive
+        </Button>
         <Button size="sm" variant="outline" disabled={syncingDrive} onClick={syncGoogleDrive}>
           <RefreshCw className={syncingDrive ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
           {syncingDrive ? 'Syncing...' : 'Sync'}
         </Button>
       </div>
     )
-  }, [syncingDrive, folderSizeScale])
+  }, [syncingDrive, folderSizeScale, connectedAccounts, enabledAccountIds, driveSelectionVisible])
 
 
   const recentFolders = folders.slice(0, 4)
@@ -692,8 +978,19 @@ export function AllFilesPage() {
       <PageHeader title={activeFolder ? <span className="block min-w-0 truncate"><button className="text-blue-600 hover:underline" onClick={closeFolder}>All Files</button>{folderBreadcrumbs.map((folder, index) => <span key={folder.id}><span className="text-slate-400"> / </span>{index === folderBreadcrumbs.length - 1 ? <span>{folder.name}</span> : <button className="text-blue-600 hover:underline" onClick={() => folder.id && openFolderById(folder.id)}>{folder.name}</button>}</span>)}</span> : 'All Files'} />
       {/* Action buttons row — visible on mobile/tablet, hidden on desktop (desktop uses header slot) */}
       <div className="mt-4 flex flex-wrap items-center gap-2 lg:hidden">
+        {connectedAccounts.length > 0 && (
+          <Button
+            size="sm"
+            variant={driveSelectionVisible ? 'soft' : 'outline'}
+            onClick={toggleDriveSelectionVisible}
+          >
+            <HardDrive className="h-3.5 w-3.5" />
+            Drives ({enabledAccountIds.size}/{connectedAccounts.length})
+          </Button>
+        )}
         <Button size="sm" onClick={() => setUploadOpen(true)}><Upload className="h-3.5 w-3.5" />Upload</Button>
         <Button size="sm" variant="outline" onClick={() => setFolderOpen(true)}><FolderPlus className="h-3.5 w-3.5" />New Folder</Button>
+        <Button size="sm" variant="outline" onClick={() => setImportDriveOpen(true)}><CloudDownload className="h-3.5 w-3.5" />Import Drive</Button>
         <Button size="sm" variant="outline" disabled={syncingDrive} onClick={syncGoogleDrive}><RefreshCw className={syncingDrive ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />{syncingDrive ? 'Syncing...' : 'Sync'}</Button>
         <div className="flex items-center gap-0.5 rounded-xl border border-slate-200 bg-slate-50 p-0.5">
           {(['xs','sm','md','lg'] as FolderSizeScale[]).map((s) => (
@@ -702,7 +999,59 @@ export function AllFilesPage() {
         </div>
       </div>
       {message ? <p className="mt-3 rounded-xl bg-blue-50 p-3 text-sm text-blue-700">{message}</p> : null}
-      {!activeFolder && (recentFolders.length > 0 ? <FolderGrid items={recentFolders} mobileTwoColumns sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} /> : <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No folders yet. Click New Folder to organize uploads.</p>)}
+
+      {/* Connected Drive Selector in Top Grid */}
+      {driveSelectionVisible && connectedAccounts.length > 0 && (
+        <DriveSelectorBar
+          accounts={connectedAccounts}
+          enabledAccountIds={enabledAccountIds}
+          onToggleAccount={toggleDriveAccount}
+          onEnableAllAccounts={enableAllDriveAccounts}
+          onOnlyAccount={onlyDriveAccount}
+          onChangeAccountColor={openAccountColorPicker}
+          visible={driveSelectionVisible}
+          onToggleVisible={toggleDriveSelectionVisible}
+          folderCountByAccount={folderCountByAccount}
+          fileCountByAccount={fileCountByAccount}
+        />
+      )}
+
+      {!activeFolder && (recentFolders.length > 0 ? (
+        <FolderGrid items={recentFolders} mobileTwoColumns sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} />
+      ) : connectedAccounts.length > 0 ? (
+        <div className="mt-4 rounded-2xl border border-blue-200/80 bg-gradient-to-br from-blue-50/80 via-indigo-50/50 to-white p-6 shadow-sm dark:bg-slate-900/40 dark:border-slate-800">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-500/20">
+                  <CloudDownload className="h-4 w-4" />
+                </span>
+                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">Google Drive Connected</h3>
+              </div>
+              <p className="text-sm text-slate-600 dark:text-slate-300 max-w-xl">
+                Connected accounts: <span className="font-semibold text-slate-800 dark:text-slate-200">{connectedAccounts.map((a) => a.email).join(', ')}</span>.
+                Sync your Google Drive to load your existing folders and files directly into 9Drive.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <Button onClick={syncGoogleDrive} disabled={syncingDrive} className="shadow-md shadow-blue-600/20">
+                <RefreshCw className={syncingDrive ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+                {syncingDrive ? 'Syncing Drive...' : 'Sync All Drive Folders'}
+              </Button>
+              <Button variant="outline" onClick={() => setImportDriveOpen(true)}>
+                <FolderSearch className="h-4 w-4" />
+                Browse &amp; Pick Folders
+              </Button>
+              <Button variant="ghost" onClick={() => setFolderOpen(true)}>
+                <FolderPlus className="h-4 w-4" />
+                New Folder
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-4 rounded-xl bg-slate-50 p-5 text-sm text-slate-500">No folders yet. Click New Folder to organize uploads.</p>
+      ))}
       {!activeFolder && moreFolders.length > 0 ? <>
         <h2 className="mt-4 font-extrabold text-slate-700">More Folders</h2>
         <FolderGrid items={moreFolders} sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} />
@@ -712,13 +1061,30 @@ export function AllFilesPage() {
         <FolderGrid items={folders} sizeScale={folderSizeScale} onFolderMenu={openFolderMenu} onFolderOpen={openFolder} onDropItem={handleDropItem} />
       </> : null}
       <div className="mt-4 flex flex-col gap-2 sm:mt-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap items-center gap-3"><Button variant="soft" className="hidden sm:inline-flex"><Archive className="h-4 w-4" />Recents</Button><Button variant="soft" className="hidden sm:inline-flex"><Star className="h-4 w-4" />Starred</Button>{selectedFileIds.size > 0 ? <div className="flex w-full flex-col gap-3 rounded-2xl border border-orange-500/20 bg-orange-500/10 p-3 sm:w-auto sm:flex-row sm:items-center sm:border-0 sm:bg-transparent sm:p-0"><span className="text-sm font-extrabold text-slate-700">{selectedFileIds.size} selected</span><div className="grid grid-cols-4 gap-2 sm:flex sm:gap-3"><Button className="w-full" variant="outline" onClick={downloadBatchAsZip}><Download className="h-4 w-4" />ZIP</Button><Button className="w-full" variant="outline" onClick={() => setMoveOpen(true)}><FolderInput className="h-4 w-4" />Move</Button><Button className="w-full" variant="danger" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4" />Delete</Button><Button className="w-full" variant="ghost" onClick={clearSelection}>Clear</Button></div></div> : null}</div>
+        <div className="flex flex-wrap items-center gap-3">
+          <BulkTypeSelector
+            files={files}
+            selectedFileIds={selectedFileIds}
+            onSelectType={handleSelectDataType}
+            onSelectAll={toggleAllVisibleFiles}
+            onClear={clearSelection}
+          />
+          {selectedFileIds.size > 0 ? <div className="flex w-full flex-col gap-3 rounded-2xl border border-orange-500/20 bg-orange-500/10 p-3 sm:w-auto sm:flex-row sm:items-center sm:border-0 sm:bg-transparent sm:p-0"><span className="text-sm font-extrabold text-slate-700">{selectedFileIds.size} selected</span><div className="grid grid-cols-5 gap-2 sm:flex sm:gap-3"><Button className="w-full" variant="outline" onClick={downloadBatchAsZip}><Download className="h-4 w-4" />ZIP</Button><Button className="w-full" variant="outline" onClick={() => setMoveOpen(true)}><FolderInput className="h-4 w-4" />Move</Button><Button className="w-full" variant="outline" onClick={openBatchTransfer}><ArrowRightLeft className="h-4 w-4" />Transfer</Button><Button className="w-full" variant="danger" onClick={() => { setPermanentDelete(false); setDeleteOpen(true); }}><Trash2 className="h-4 w-4" />Delete</Button><Button className="w-full" variant="ghost" onClick={clearSelection}>Clear</Button></div></div> : null}
+        </div>
         <div className="flex gap-3"><Button variant={fileViewMode === 'grid' ? 'soft' : 'outline'} size="icon" aria-label="Show files as grid" aria-pressed={fileViewMode === 'grid'} onClick={() => changeFileViewMode('grid')}><LayoutGrid className="h-5 w-5" /></Button><Button variant={fileViewMode === 'list' ? 'soft' : 'outline'} size="icon" aria-label="Show files as list" aria-pressed={fileViewMode === 'list'} onClick={() => changeFileViewMode('list')}><List className="h-5 w-5" /></Button></div>
       </div>
       {cutFolder ? <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-700"><ClipboardPaste className="mr-2 inline h-4 w-4" />Cut folder: {cutFolder.name}. Press Ctrl+V or right-click empty area to paste here.</p> : null}
       {files.length === 0 ? (
         <Card className="mt-3 p-5 bg-white/10 backdrop-blur-sm border border-white/20 dark:bg-transparent dark:border-0 dark:p-0 dark:shadow-none">
-          <p className="text-sm text-slate-500">{searchQuery ? `No files found for "${searchQuery}".` : activeFolder ? 'No files in this folder yet.' : 'No uploaded files yet. Connect Google Drive in Settings, then upload a file.'}</p>
+          <p className="text-sm text-slate-500">
+            {searchQuery
+              ? `No files found for "${searchQuery}".`
+              : activeFolder
+              ? 'No files in this folder yet.'
+              : folders.length > 0
+              ? 'No loose files in root. All files are organized inside the folders above.'
+              : 'No uploaded files yet. Connect Google Drive in Settings, then upload a file.'}
+          </p>
         </Card>
       ) : (
         <Card className="mt-3 p-4 sm:p-5 bg-white/10 backdrop-blur-sm border border-white/20 dark:bg-transparent dark:border-0 dark:p-0 dark:shadow-none">
@@ -731,9 +1097,48 @@ export function AllFilesPage() {
       )}
       </div>
       <EmptyAreaContextMenu x={emptyContextMenu.x} y={emptyContextMenu.y} open={emptyContextMenu.open} canPasteFolder={Boolean(cutFolder)} onClose={() => setEmptyContextMenu({ x: 0, y: 0, open: false })} onUpload={() => { setUploadOpen(true); setEmptyContextMenu({ x: 0, y: 0, open: false }) }} onCreateFolder={() => { setFolderOpen(true); setEmptyContextMenu({ x: 0, y: 0, open: false }) }} onPasteFolder={() => { pasteFolder().catch((error) => setMessage(error instanceof Error ? error.message : 'Failed to paste folder')); setEmptyContextMenu({ x: 0, y: 0, open: false }) }} />
-      <FileContextMenu x={contextMenu.x} y={contextMenu.y} file={contextMenu.file} onClose={() => setContextMenu({ x: 0, y: 0, file: null })} onView={viewFile} onDownload={downloadFile} onRename={() => { setRenameValue(activeFile?.name ?? ''); setRenameOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onMove={() => { setMoveOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onDetails={() => { setDetailOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onShare={shareFile} onCopyLink={copyShareLinkDirect} onInvite={inviteToFile} onDelete={() => { setDeleteOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} />
-      <FolderContextMenu x={folderContextMenu.x} y={folderContextMenu.y} folder={folderContextMenu.folder} onClose={() => setFolderContextMenu({ x: 0, y: 0, folder: null })} onCut={() => cutSelectedFolder(activeFolderForMenu)} onRename={() => { setFolderRenameValue(activeFolderForMenu?.name ?? ''); setFolderRenameColor(normalizeFolderColor(activeFolderForMenu?.color)); setFolderRenameIconUrl(activeFolderForMenu?.iconUrl ?? defaultFolderIconUrl); setFolderRenameOpen(true); setFolderContextMenu({ x: 0, y: 0, folder: null }) }} onInvite={inviteToFolder} onCopyLink={copyFolderLink} onDelete={() => { setFolderDeleteOpen(true); setFolderContextMenu({ x: 0, y: 0, folder: null }) }} />
+      <FileContextMenu x={contextMenu.x} y={contextMenu.y} file={contextMenu.file} onClose={() => setContextMenu({ x: 0, y: 0, file: null })} onView={viewFile} onDownload={downloadFile} onRename={() => { setRenameValue(activeFile?.name ?? ''); setRenameOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onMove={() => { setMoveOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onTransfer={() => activeFile && openFileTransfer(activeFile)} onDetails={() => { setDetailOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onShare={shareFile} onCopyLink={copyShareLinkDirect} onInvite={inviteToFile} onDelete={() => { setPermanentDelete(false); setDeleteOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} />
+      <FolderContextMenu x={folderContextMenu.x} y={folderContextMenu.y} folder={folderContextMenu.folder} onClose={() => setFolderContextMenu({ x: 0, y: 0, folder: null })} onCut={() => cutSelectedFolder(activeFolderForMenu)} onRename={() => { setFolderRenameValue(activeFolderForMenu?.name ?? ''); setFolderRenameColor(normalizeFolderColor(activeFolderForMenu?.color)); setFolderRenameIconUrl(activeFolderForMenu?.iconUrl ?? defaultFolderIconUrl); setFolderRenameOpen(true); setFolderContextMenu({ x: 0, y: 0, folder: null }) }} onTransfer={() => activeFolderForMenu && openFolderTransfer(activeFolderForMenu)} onChangeAccountColor={() => openFolderAccountColorPicker(activeFolderForMenu)} onInvite={inviteToFolder} onCopyLink={copyFolderLink} onDelete={() => { setFolderDeleteOpen(true); setFolderContextMenu({ x: 0, y: 0, folder: null }) }} />
       <FileDetailsDrawer open={detailOpen} file={activeFile} onClose={() => setDetailOpen(false)} />
+
+      <TransferModal
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        onConfirm={executeTransfer}
+        title={
+          transferTarget.type === 'file'
+            ? 'Transfer File to Account'
+            : transferTarget.type === 'folder'
+            ? 'Transfer Folder to Account'
+            : 'Transfer Files to Account'
+        }
+        itemSummary={
+          transferTarget.type === 'file'
+            ? `${transferTarget.file?.name || 'File'} (${transferTarget.file?.size || ''})`
+            : transferTarget.type === 'folder'
+            ? `Folder: ${transferTarget.folder?.name || 'Folder'}`
+            : `${transferTarget.fileIds?.length ?? 0} selected file(s)`
+        }
+        accounts={connectedAccounts}
+        currentAccountId={
+          transferTarget.type === 'file'
+            ? transferTarget.file?.connectedAccountId
+            : transferTarget.type === 'folder'
+            ? transferTarget.folder?.connectedAccountId || undefined
+            : undefined
+        }
+        transferring={transferring}
+      />
+
+      <GoogleDriveImportModal
+        open={importDriveOpen}
+        onClose={() => setImportDriveOpen(false)}
+        accounts={connectedAccounts}
+        onImportSuccess={async () => {
+          await loadAll()
+          window.dispatchEvent(new Event('9drive:storage-changed'))
+        }}
+      />
 
       <DummyModal open={uploadOpen} title="Upload File" description="Stream file directly to selected Google Drive account." onClose={() => setUploadOpen(false)}>
         <form onSubmit={uploadFile} className="grid gap-4">
@@ -772,7 +1177,64 @@ export function AllFilesPage() {
       </DummyModal>
       <DummyModal open={renameOpen} title="Rename File" description={activeFile?.name ?? ''} onClose={() => setRenameOpen(false)}><form onSubmit={renameFile} className="grid gap-4"><Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} required /><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setRenameOpen(false)}>Cancel</Button><Button>Rename</Button></div></form></DummyModal>
       <DummyModal open={moveOpen} title="Move to Folder" description={selectedFileIds.size > 0 ? `Move ${selectedFileIds.size} files` : activeFile?.name ?? ''} onClose={() => setMoveOpen(false)}><form onSubmit={moveFile} className="grid gap-4"><select className="h-11 rounded-xl border border-slate-200 px-3 text-sm" value={selectedFolderId} onChange={(event) => setSelectedFolderId(event.target.value)}><option value="">No folder</option>{allFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><div className="flex justify-end gap-3"><Button type="button" variant="outline" onClick={() => setMoveOpen(false)}>Cancel</Button><Button>Move</Button></div></form></DummyModal>
-      <DummyModal open={deleteOpen} title={selectedFileIds.size > 0 ? 'Delete Files' : 'Delete File'} description={selectedFileIds.size > 0 ? `Delete ${selectedFileIds.size} files from Google Drive?` : `Delete ${activeFile?.name ?? 'file'} from Google Drive?`} onClose={() => setDeleteOpen(false)}><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button><Button variant="danger" onClick={deleteFile}>Delete</Button></div></DummyModal>
+      <DummyModal
+        open={deleteOpen}
+        title={selectedFileIds.size > 0 ? 'Delete Files' : 'Delete File'}
+        description={
+          selectedFileIds.size > 0
+            ? `Are you sure you want to delete ${selectedFileIds.size} file(s)?`
+            : `Are you sure you want to delete "${activeFile?.name ?? 'file'}"?`
+        }
+        onClose={() => {
+          setDeleteOpen(false)
+          setPermanentDelete(false)
+        }}
+      >
+        <div className="grid gap-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+            {permanentDelete ? (
+              <p className="font-medium text-red-600 dark:text-red-400">
+                ⚠️ Files will be permanently deleted immediately from Google Drive and cannot be recovered.
+              </p>
+            ) : (
+              <p>
+                Files will be moved to Google Drive&apos;s Bin (Trash) and 9Drive&apos;s Recycle Bin. You can restore them anytime or empty the Recycle Bin to permanently free up space.
+              </p>
+            )}
+          </div>
+
+          <label className="flex items-center gap-2.5 text-sm cursor-pointer select-none text-slate-700 dark:text-slate-200">
+            <input
+              type="checkbox"
+              checked={permanentDelete}
+              onChange={(e) => setPermanentDelete(e.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-red-600 focus:ring-red-500"
+            />
+            <span className="font-semibold text-slate-900 dark:text-white">
+              Permanently delete from Google Drive (skip Recycle Bin)
+            </span>
+          </label>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setDeleteOpen(false)
+                setPermanentDelete(false)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={deleteFile}
+            >
+              {permanentDelete ? 'Permanently Delete' : 'Move to Trash'}
+            </Button>
+          </div>
+        </div>
+      </DummyModal>
       <DummyModal open={shareOpen} title="Share Link" description={activeFile?.name ?? ''} onClose={() => setShareOpen(false)}>
         <div className="grid gap-4">
           <div>
@@ -843,6 +1305,16 @@ export function AllFilesPage() {
           {!previewLoading && !previewError && !activePreviewKind ? <div className="p-6 text-center text-sm text-slate-500">Preview not available for this file type. Use Download instead.</div> : null}
         </div>
       </DummyModal>
+
+      <AccountColorPickerModal
+        open={accountColorPickerOpen}
+        account={accountForColorPicker}
+        onClose={() => {
+          setAccountColorPickerOpen(false)
+          setAccountForColorPicker(null)
+        }}
+        onColorSaved={handleAccountColorSaved}
+      />
     </>
   )
 }
