@@ -20,6 +20,7 @@ import {
   X,
   ShieldCheck,
   HardDrive,
+  Images,
   Info,
   CheckCircle,
   ChevronDown,
@@ -36,6 +37,7 @@ import { cn } from '@/lib/utils'
 
 const menu = [
   { label: 'All Files', icon: FileArchive, href: '/all-files' },
+  { label: 'Google Photos', icon: Images, href: '/photos' },
   { label: 'Quota Tracker', icon: Gauge, href: '/quota' },
   { label: 'Shared With Me', icon: Share2, href: '/shared' },
   { label: 'Starred', icon: Star, href: '/starred', disabled: true },
@@ -168,12 +170,31 @@ function Sidebar({ onNavigate, user, storage, breakdown, onLogout }: { onNavigat
 
       <div className="mt-auto border-t border-slate-200/60 pt-4 text-[13px]">
         <div className="mb-3 space-y-1.5">
-          {items.map(([label, value, color]) => (
-            <div key={label} className="flex items-center justify-between text-slate-500 font-medium">
-              <span className="flex items-center gap-1.5"><span className={cn('h-1.5 w-1.5 rounded-full', color)} />{label}</span>
-              <span className="font-semibold text-slate-700">{value}</span>
-            </div>
-          ))}
+          {items.map(([label, value, color]) => {
+            const isMedia = label === 'Photo' || label === 'Video'
+            return isMedia ? (
+              <NavLink
+                key={label}
+                to="/photos"
+                onClick={onNavigate}
+                className="flex items-center justify-between text-slate-500 font-medium hover:text-slate-900 transition-colors py-0.5 rounded px-1 -mx-1 hover:bg-slate-200/50"
+              >
+                <span className="flex items-center gap-1.5">
+                  <span className={cn('h-1.5 w-1.5 rounded-full', color)} />
+                  {label}
+                </span>
+                <span className="font-semibold text-slate-700">{value}</span>
+              </NavLink>
+            ) : (
+              <div key={label} className="flex items-center justify-between text-slate-500 font-medium py-0.5 px-1 -mx-1">
+                <span className="flex items-center gap-1.5">
+                  <span className={cn('h-1.5 w-1.5 rounded-full', color)} />
+                  {label}
+                </span>
+                <span className="font-semibold text-slate-700">{value}</span>
+              </div>
+            )
+          })}
         </div>
         <div className="flex justify-between text-sm font-bold text-slate-700">
           <span>{formatBytes(storage?.usedBytes)} used</span>
